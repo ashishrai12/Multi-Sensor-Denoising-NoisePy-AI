@@ -2,6 +2,11 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.signal import correlate, welch, hilbert
 import os
+try:
+    import signal_ai
+    HAS_AI = True
+except ImportError:
+    HAS_AI = False
 
 def generate_noise_data(duration=10.0, fs=1000, ambient_std=1.0, system_std=0.5, spike_prob=0.005, spike_amp=10.0, delay_samples=50):
     """
@@ -100,6 +105,24 @@ def run_analysis():
     
     lags = np.arange(-len(corr_raw)//2, len(corr_raw)//2)
     
+    # --- AI COMPONENT ---
+    s1_ai_denoised = None
+    anomalies_s1 = None
+    if HAS_AI:
+        print("Training AI Signal Model...")
+        # Generate clean data for training (no spikes)
+        _, train_s1, train_s2 = generate_noise_data(duration=10.0, fs=fs, spike_prob=0)
+        model, mean, std = signal_ai.train_denoiser([train_s1, train_s2], epochs=15)
+        
+        print("Applying AI Analysis...")
+        s1_ai_denoised = signal_ai.ai_denoise(model, s1_raw, mean, std)
+        anomalies_s1, _ = signal_ai.detect_anomalies(model, s1_raw, mean, std)
+        
+        # Cross-correlate with AI-denoised signal
+        s2_ai_denoised = signal_ai.ai_denoise(model, s2_raw, mean, std)
+        corr_ai = cross_correlate(s1_ai_denoised, s2_ai_denoised)
+    # ---------------------
+    
     # Visual Characterization Dashboard
     fig, axes = plt.subplots(3, 2, figsize=(15, 12))
     plt.subplots_adjust(hspace=0.4)
@@ -141,15 +164,38 @@ def run_analysis():
     center = len(lags) // 2
     window = 500
     axes[2, 1].plot(lags[center-window:center+window], corr_proc[center-window:center+window], color='#9467bd', label='NoisePy Processed')
+    
+    if HAS_AI:
+        axes[2, 1].plot(lags[center-window:center+window], corr_ai[center-window:center+window], color='#00d1b2', label='AI Denoised', alpha=0.7)
+        
     axes[2, 1].axvline(delay, color='red', linestyle='--', alpha=0.7, label=f'True Delay ({delay})')
-    axes[2, 1].set_title('System Response (NoisePy Processed)', fontsize=12, fontweight='bold')
+    axes[2, 1].set_title('System Response (Processed vs AI)', fontsize=12, fontweight='bold')
     axes[2, 1].set_xlabel('Lag (samples)')
     axes[2, 1].legend()
     axes[2, 1].grid(True, alpha=0.3)
     
+    # New AI-specific visualization if AI is enabled
+    if HAS_AI:
+        fig_ai, ax_ai = plt.subplots(2, 1, figsize=(15, 8))
+        ax_ai[0].plot(t[:1000], s1_raw[:1000], color='gray', alpha=0.5, label='Raw Signal')
+        ax_ai[0].plot(t[:1000], s1_ai_denoised[:1000], color='#00d1b2', label='AI Denoised Output')
+        ax_ai[0].set_title('AI Denoising Performance', fontsize=12, fontweight='bold')
+        ax_ai[0].legend()
+        
+        # Show where anomalies were detected
+        anomaly_times = t[:1000][anomalies_s1[:1000]]
+        anomaly_vals = s1_raw[:1000][anomalies_s1[:1000]]
+        ax_ai[1].plot(t[:1000], s1_raw[:1000], color='gray', alpha=0.5)
+        ax_ai[1].scatter(anomaly_times, anomaly_vals, color='red', s=20, label='AI Detected Spikes')
+        ax_ai[1].set_title('AI Anomaly Detection (Spikes)', fontsize=12, fontweight='bold')
+        ax_ai[1].legend()
+        plt.tight_layout()
+        plt.savefig('ai_analysis_dashboard.png', dpi=150)
+        plt.close(fig_ai)
+
     plt.tight_layout()
     plt.savefig('noise_dashboard.png', dpi=150)
-    plt.show()
+    plt.close(fig)
 
     # SNR Degradation Loop
     print("Running SNR degradation analysis...")

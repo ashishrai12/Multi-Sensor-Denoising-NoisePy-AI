@@ -1,6 +1,11 @@
 import unittest
 import numpy as np
 from noise_analysis import generate_noise_data, spectral_whitening, one_bit_normalization, cross_correlate
+try:
+    import signal_ai
+    HAS_AI = True
+except ImportError:
+    HAS_AI = False
 
 class TestNoiseAnalysis(unittest.TestCase):
 
@@ -73,6 +78,19 @@ class TestNoiseAnalysis(unittest.TestCase):
         
         # Allowing a small tolerance if needed, but should be exact in this simulation
         self.assertEqual(recovered_delay, delay)
+        
+    def test_ai_module_integration(self):
+        """Test if the AI module can be loaded and run if available."""
+        if not HAS_AI:
+            self.skipTest("PyTorch or signal_ai not found")
+            
+        data = np.random.normal(0, 1, 500)
+        model, mean, std = signal_ai.train_denoiser([data], epochs=2, input_size=50)
+        denoised = signal_ai.ai_denoise(model, data, mean, std, input_size=50)
+        self.assertEqual(len(denoised), len(data))
+        
+        is_anomaly, score = signal_ai.detect_anomalies(model, data, mean, std, input_size=50)
+        self.assertEqual(len(is_anomaly), len(data))
 
 if __name__ == '__main__':
     unittest.main()
